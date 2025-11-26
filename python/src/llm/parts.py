@@ -143,3 +143,48 @@ class Decoder(tf.keras.layers.Layer):
         ffn_final = mha_1 + self.ffn(norm_2)
 
         return ffn_final
+
+
+class LLM(tf.keras.Model):
+    def __init__(self, vocabSize, dModel, numHeads, ffnInnerSize, decoderCount, maxPositions = 2048, **kwrags):
+        super().__init__(**kwrags)
+        self.vocabSize = vocabSize
+        self.dModel = dModel
+        self.numHeads = numHeads
+        self.ffnInnerSize = ffnInnerSize
+        self.decoderCount = decoderCount
+
+        self.tokenEmbedding = tf.keras.layers.Embedding(vocabSize, dModel)
+        self.positionalEmbedding = tf.keras.layers.Embedding(maxPositions, dModel)
+
+        self.decoderBlocks = [Decoder(self.dModel, self.numHeads, self.ffnInnerSize) for _ in range(self.decoderCount)]
+
+        self.final_norm = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+
+    def generate_mask(self, sequenceLength):
+        mask = tf.linalg.band_part(tf.ones((sequenceLength, sequenceLength)), -1, 0)
+        mask = 1 - mask
+
+        return tf.cast(mask[tf.newaxis, tf.newaxis, :, :], dtype=tf.float32)
+
+    def call(self, x):
+        batchSize = tf.shape(x)[0]
+        sequenceLength = tf.shape(x)[1]
+
+        # Construct initial mask and embeddings.
+        mask = self.generate_mask(sequenceLength)
+
+        tokenEmbeddings = self.tokenEmbedding(x)
+        positionalEmbeddings = self.positionalEmbedding(tf.tile(tf.range(sequenceLength)[tf.newaxis, :], [batchSize, 1]))
+
+        hiddenEmbeddings = tokenEmbeddings + positionalEmbeddings
+
+        # Now run the embeddings through every decoder block.
+        for block in self.decoderBlocks:
+            hiddenEmbeddings = block([hiddenEmbeddings, mask])
+        
+        # Next, perform normalization, and return the output after linking them with the embedding weights.
+        normal_output = self.final_norm(hiddenEmbeddings)
+        logits = tf.matmul(normal_output, self.tokenEmbedding.weights[0], transpose_b = True)
+
+        return logits
