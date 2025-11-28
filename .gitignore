@@ -6,7 +6,7 @@ python/__pycache__/
 rust-core/target/
 
 # Dataset
-dataset/dataset
+dataset/tokens.bin
 dataset/venv
 
 # Others

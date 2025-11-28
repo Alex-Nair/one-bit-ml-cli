@@ -102,7 +102,7 @@ class MultiHeadedAttention(tf.keras.layers.Layer):
         # Concatenate the results.
         context = tf.transpose(context, [0, 2, 1, 3])
         batch, seqLength = tf.shape(context)[0], tf.shape(context)[1]
-        context = tf.reshape(context, (batch, seqLength, self.valueDimension))
+        context = tf.reshape(context, (batch, seqLength, self.dModel))
 
         # Return the result of the final linear layer.
         return self.finalLinearLayer(context)
