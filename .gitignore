@@ -3,7 +3,7 @@ python/venv
 python/__pycache__/
 
 # Rust
-rust-core/target/
+rust/target/
 
 # Dataset
 dataset/tokens.bin
