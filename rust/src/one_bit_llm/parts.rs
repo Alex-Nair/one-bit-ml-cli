@@ -1,6 +1,6 @@
 use nalgebra::*;
 use rand::{self, Rng};
-use std::f64::consts::PI;
+use std::{f64::consts::PI};
 
 
 // Helper Functions.
@@ -46,6 +46,24 @@ fn element_multiplication_matrix(matrix_1: DMatrix<f64>, matrix_2: DMatrix<f64>)
     for row in 0..matrix_1.shape().0 {
         for column in 0..matrix_1.shape().1 {
             resultant_matrix[(row, column)] = matrix_1[(row, column)] * matrix_2[(row, column)];
+        }
+    }
+
+    resultant_matrix
+}
+
+fn softmax_matrix(matrix: DMatrix<f64>) -> DMatrix<f64> {
+    let mut resultant_matrix: DMatrix<f64> = matrix.clone();
+    
+    for col in 0..matrix.shape().1 {
+        let mut total: f64 = 0.0;
+
+        for row in 0..matrix.shape().0 {
+            total += matrix[(row, col)].exp();
+        }
+
+        for row in 0..matrix.shape().0 {
+            resultant_matrix[(row, col)] /= total;
         }
     }
 
@@ -308,5 +326,188 @@ impl Layer for LayerNorm {
     fn adjust_parameters(&mut self, learning_rate: f64) {
         self.scaling_parameter -= self.scaling_gradient * learning_rate;
         self.shifting_parameter -= self.shifting_gradient * learning_rate;
+    }
+}
+
+
+pub struct ScaledDotProductAttention {
+    prev_q: DMatrix<f64>,
+    prev_k: DMatrix<f64>,
+    prev_v: DMatrix<f64>,
+    prev_mask_result: DMatrix<f64>,
+    prev_softmax_result: DMatrix<f64>
+}
+
+impl ScaledDotProductAttention {
+    pub fn new() -> ScaledDotProductAttention {
+        ScaledDotProductAttention {
+            prev_q: DMatrix::from_element(1, 1, 0.0),
+            prev_k: DMatrix::from_element(1, 1, 0.0),
+            prev_v: DMatrix::from_element(1, 1, 0.0),
+            prev_mask_result: DMatrix::from_element(1, 1, 0.0),
+            prev_softmax_result: DMatrix::from_element(1, 1, 0.0)
+        }
+    }
+
+    pub fn calculate(&mut self, q: DMatrix<f64>, k: DMatrix<f64>, v: DMatrix<f64>, mask: DMatrix<f64>) -> DMatrix<f64> {
+        let scaled_multiplication: DMatrix<f64> = (q * k.transpose()) / (k.shape().1 as f64);
+        
+        let masked_inputs: DMatrix<f64> = scaled_multiplication + mask;
+        self.prev_mask_result = masked_inputs.clone();
+        
+        let softmax_result: DMatrix<f64> = softmax_matrix(masked_inputs);
+        self.prev_softmax_result = softmax_result.clone();
+        
+        let final_result: DMatrix<f64> = softmax_result * v;
+
+        final_result
+    }
+
+    pub fn calculate_gradients(&mut self, previous_gradient: DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>, DMatrix<f64>) {
+        let mut exponent_sums: DMatrix<f64> = DMatrix::from_element(1, self.prev_mask_result.shape().1, 0.0);
+
+        for col in 0..exponent_sums.shape().1 {
+            for row in 0..self.prev_mask_result.shape().0 {
+                exponent_sums[(0, col)] += self.prev_mask_result[(row, col)].exp();
+            }
+        }
+
+        let v_gradients: DMatrix<f64> = &self.prev_softmax_result * &previous_gradient;
+
+        let mut softmax_gradients: DMatrix<f64> = &previous_gradient * self.prev_v.transpose();
+
+        for col in 0..softmax_gradients.shape().1 {
+            for row in 0..softmax_gradients.shape().0 {
+                softmax_gradients[(row, col)] *= &self.prev_softmax_result[(row, col)].exp() / exponent_sums[(0, col)] - (2.0 * &self.prev_softmax_result[(row, col)]).exp() / (exponent_sums[(0, col)]).powi(2);
+            }
+        }
+
+        let k_gradients: DMatrix<f64> = &softmax_gradients * &self.prev_q * (1.0 / (self.prev_k.shape().1 as f64).sqrt());
+        let q_gradients: DMatrix<f64> = &softmax_gradients * &self.prev_k * (1.0 / (self.prev_k.shape().1 as f64).sqrt());
+
+        let final_gradients: (DMatrix<f64>, DMatrix<f64>, DMatrix<f64>) = (q_gradients, k_gradients, v_gradients);
+        
+        final_gradients
+    }
+}
+
+
+pub struct MultiHeadAttention {
+    pub d_model: usize,
+    pub number_of_heads: usize,
+
+    pub q_linear: Vec<Dense>,
+    pub k_linear: Vec<Dense>,
+    pub v_linear: Vec<Dense>,
+
+    pub prev_k: DMatrix<f64>,
+
+    pub scaled_layers: Vec<ScaledDotProductAttention>,
+
+    pub final_linear: Dense
+}
+
+impl MultiHeadAttention {
+    pub fn new(d_model: usize, number_of_heads: usize) -> MultiHeadAttention {
+        let mut q_linear: Vec<Dense> = vec![];
+        let mut k_linear: Vec<Dense> = vec![];
+        let mut v_linear: Vec<Dense> = vec![];
+        let mut scaled_layers: Vec<ScaledDotProductAttention> = vec![];
+
+        for _ in 0..number_of_heads {
+            q_linear.push(Dense::new(d_model, d_model));
+            k_linear.push(Dense::new(d_model, d_model));
+            v_linear.push(Dense::new(d_model, d_model));
+            scaled_layers.push(ScaledDotProductAttention::new());
+        }
+
+        MultiHeadAttention { 
+            d_model: d_model,
+            number_of_heads: number_of_heads,
+            q_linear: q_linear,
+            k_linear: k_linear,
+            v_linear: v_linear,
+            prev_k: DMatrix::from_element(1, 1, 0.0),
+            scaled_layers: scaled_layers,
+            final_linear: Dense::new(d_model, d_model * number_of_heads)
+        }
+    }
+
+    pub fn calculate(&mut self, q: DMatrix<f64>, k: DMatrix<f64>, v: DMatrix<f64>, mask: DMatrix<f64>) -> DMatrix<f64> {
+        let mut q_results: Vec<DMatrix<f64>> = vec![];
+        let mut k_results: Vec<DMatrix<f64>> = vec![];
+        let mut v_results: Vec<DMatrix<f64>> = vec![];
+
+        self.prev_k = k.clone();
+
+        for i in 0..self.number_of_heads {
+            q_results.push(self.q_linear[i].calculate(q.clone()));
+            k_results.push(self.k_linear[i].calculate(k.clone()));
+            v_results.push(self.v_linear[i].calculate(v.clone()));
+        }
+
+        let mut scaled_results: Vec<DMatrix<f64>> = vec![];
+
+        for i in 0..self.number_of_heads {
+            scaled_results.push(self.scaled_layers[i].calculate(q_results[i].clone(), k_results[i].clone(), v_results[i].clone(), mask.clone()))
+        }
+
+        let mut concatenated_result: DMatrix<f64> = DMatrix::from_element(scaled_results[0].shape().0, scaled_results[0].shape().1 * self.number_of_heads, 0.0);
+        
+        for i in 0..self.number_of_heads {
+            for row in 0..scaled_results[i].shape().0 {
+                for col in 0..scaled_results[i].shape().1 {
+                    concatenated_result[(row, col + (i * scaled_results[0].shape().1))] = scaled_results[i][(row, col)];
+                }
+            }
+        }
+
+        self.final_linear.calculate(concatenated_result)
+    }
+
+    pub fn calculate_gradients(&mut self, previous_gradient: DMatrix<f64>) -> (DMatrix<f64>, DMatrix<f64>, DMatrix<f64>) {
+        let final_layer_result: DMatrix<f64> = self.final_linear.calculate_gradients(previous_gradient);
+        
+        let mut split_results: Vec<DMatrix<f64>> = vec![];
+
+        for i in 0..self.number_of_heads {
+            let mut new_result: DMatrix<f64> = DMatrix::from_element(self.d_model, self.d_model, 0.0);
+
+            for row in 0..self.d_model {
+                for col in 0..self.d_model {
+                    new_result[(row, col)] = final_layer_result[(row, col + (i * self.d_model))];
+                }
+            }
+
+            split_results.push(new_result);
+        }
+
+        let mut concat_gradients: Vec<(DMatrix<f64>, DMatrix<f64>, DMatrix<f64>)> = vec![];
+
+        for i in 0..self.number_of_heads {
+            concat_gradients.push(self.scaled_layers[i].calculate_gradients(split_results[i].clone()));
+        }
+        
+        let mut q_gradients: DMatrix<f64> = self.prev_k.clone();
+        let mut k_gradients: DMatrix<f64> = self.prev_k.clone();
+        let mut v_gradients: DMatrix<f64> = self.prev_k.clone();
+
+        for i in 0..self.number_of_heads {
+            q_gradients += self.q_linear[i].calculate_gradients(concat_gradients[i].0.clone());
+            k_gradients += self.k_linear[i].calculate_gradients(concat_gradients[i].1.clone());
+            v_gradients += self.v_linear[i].calculate_gradients(concat_gradients[i].2.clone());
+        }
+
+        (q_gradients, k_gradients, v_gradients)
+       }
+    
+    pub fn adjust_parameters(&mut self, learning_rate: f64) {
+        for i in 0..self.number_of_heads {
+            self.q_linear[i].adjust_parameters(learning_rate);
+            self.k_linear[i].adjust_parameters(learning_rate);
+            self.v_linear[i].adjust_parameters(learning_rate);
+        }
+
+        self.final_linear.adjust_parameters(learning_rate);
     }
 }
