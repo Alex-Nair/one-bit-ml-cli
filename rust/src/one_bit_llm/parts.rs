@@ -587,3 +587,136 @@ impl Layer for PositionalEmbedding {
         self.parameters -= learning_rate * &self.parameter_gradients;
     }
 }
+
+
+pub struct TokenEmbedding {
+    pub embedding_matrix: DMatrix<f64>,
+    pub matrix_gradients: DMatrix<f64>,
+    pub previous_input: DMatrix<usize>
+}
+
+impl TokenEmbedding {
+    pub fn new(vocabulary_size: usize, dimension_size: usize, max_positions: usize) -> TokenEmbedding {
+        TokenEmbedding {
+            embedding_matrix: DMatrix::new_random(dimension_size, vocabulary_size),
+            matrix_gradients: DMatrix::from_element(dimension_size, vocabulary_size, 0.0),
+            previous_input: DMatrix::from_element(1, max_positions, 0)
+        }
+    }
+
+    pub fn calculate(&mut self, input: DMatrix<usize>) -> DMatrix<f64> {
+        self.previous_input = input.clone();
+
+        let mut final_matrix: DMatrix<f64> = DMatrix::from_element(self.embedding_matrix.shape().0, input.shape().1, 0.0);
+
+        for i in 0..input.shape().1 {
+            for j in 0..final_matrix.shape().0 {
+                final_matrix[(j, i)] = self.embedding_matrix[(j, input[(0, i)])];
+            }
+        }
+
+        final_matrix
+    }
+}
+
+impl Layer for TokenEmbedding {
+    fn calculate_gradients(&mut self, previous_gradient: DMatrix<f64>) -> DMatrix<f64> {
+        self.matrix_gradients = 0.0 * &self.matrix_gradients;
+
+        for i in 0..self.previous_input.shape().1 {
+            for j in 0..self.matrix_gradients.shape().0 {
+                self.matrix_gradients[(j, self.previous_input[(0, i)])] += previous_gradient[(j, i)];
+            }
+        }
+
+        // Empty matrix returned, simply because we shouldn't need to pass gradients past this point.
+        DMatrix::from_element(1, 1, 0.0)
+    }
+    
+    fn adjust_parameters(&mut self, learning_rate: f64) {
+        self.embedding_matrix -= learning_rate * &self.matrix_gradients;
+    }
+}
+
+
+pub struct LLM {
+    pub token_embeddings: TokenEmbedding,
+    pub positional_embeddings: PositionalEmbedding,
+    pub decoders: Vec<Decoder>,
+    pub final_norm: LayerNorm,
+    pub previous_logits: DMatrix<f64>
+}
+
+impl LLM {
+    pub fn new(vocabulary_size: usize, d_model: usize, num_heads: usize, ffn_inner_size: usize, decoder_count: usize, max_size: usize) -> LLM {
+        let mut decoders: Vec<Decoder> = vec![];
+
+        for _ in 0..decoder_count {
+            decoders.push(Decoder::new(d_model, num_heads, ffn_inner_size));
+        }
+
+        LLM {
+            token_embeddings: TokenEmbedding::new(vocabulary_size, d_model, max_size),
+            positional_embeddings: PositionalEmbedding::new(vocabulary_size, d_model),
+            decoders: decoders,
+            final_norm: LayerNorm::new(1.0),
+            previous_logits: DMatrix::from_element(1, 1, 0.0)
+        }
+    }
+
+    pub fn generate_mask(sequence_length: usize) -> DMatrix<f64> {
+        let mut mask: DMatrix<f64> = DMatrix::from_element(sequence_length, sequence_length, 0.0);
+
+        for i in 0..(sequence_length - 1) {
+            for j in (i + 1)..sequence_length {
+                mask[(i, j)] = std::f64::NEG_INFINITY;
+            }
+        }
+
+        mask
+    }
+
+    pub fn calculate(&mut self, input: DMatrix<usize>) -> DMatrix<f64> {
+        let sequence_length: usize = input.shape().1;
+        let mask: DMatrix<f64> = LLM::generate_mask(sequence_length);
+
+        let token_embeddings: DMatrix<f64> = self.token_embeddings.calculate(input);
+        let mut embeddings: DMatrix<f64> = self.positional_embeddings.calculate(token_embeddings.clone());
+        
+        // Decoder section.
+        for decoder in self.decoders.iter_mut() {
+            embeddings = decoder.calculate(embeddings, mask.clone());
+        }
+
+        // Normalization and output
+        let logits: DMatrix<f64> = self.final_norm.calculate(embeddings);
+
+        self.previous_logits = logits.clone();
+        
+        logits
+    }
+
+    pub fn calculate_gradients(&mut self, prev_gradient: DMatrix<f64>) {
+        let norm_gradients: DMatrix<f64> = self.final_norm.calculate_gradients(prev_gradient.clone());
+        let mut decoder_gradients: DMatrix<f64> = norm_gradients;
+
+        let decoder_count = self.decoders.len();
+        for i in 0..decoder_count {
+            decoder_gradients = self.decoders[decoder_count - 1 - i].calculate_gradients(decoder_gradients.clone());
+        }
+
+        let positional_gradient: DMatrix<f64> = self.positional_embeddings.calculate_gradients(decoder_gradients);
+        self.token_embeddings.calculate_gradients(positional_gradient);
+    }
+
+    pub fn adjust_parameters(&mut self, learning_rate: f64) {
+        self.token_embeddings.adjust_parameters(learning_rate);
+        self.positional_embeddings.adjust_parameters(learning_rate);
+
+        for decoder in self.decoders.iter_mut() {
+            decoder.adjust_parameters(learning_rate);
+        }
+
+        self.final_norm.adjust_parameters(learning_rate);
+    }
+}
