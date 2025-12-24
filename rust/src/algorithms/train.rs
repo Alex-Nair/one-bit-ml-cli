@@ -1,28 +1,23 @@
-use std::fs;
+use std::{fs::File, io::{Read, Seek, SeekFrom}};
 use nalgebra::*;
 
 pub fn load_tokens() -> Vec<u8> {
-    let data = fs::read("../../dataset/tokens.bin").expect("Failed to read file.");
+    // Commented for testing purposes. The below code block only extracts the first 16 MB of data.
+    // let data = fs::read("../../dataset/tokens.bin").expect("Failed to read file.");
 
-    let mut sample: Vec<u8> = vec![];
+    let mut input_file = File::open("../../dataset/tokens.bin").expect("Failed to read file.");
+    let mut data: Vec<u8> = vec![0; 16000];
+    let _ = input_file.seek(SeekFrom::Start(0));
+    let _ = input_file.read_exact(&mut data);
 
-    // For debugging purposes: Shrink the dataset for faster testing.
-    for i in 0..1000 {
-        sample.push(data[i]);
-    }
-
-    sample
+    data
 }
 
 pub fn convert_to_usize(input: Vec<u8>) -> Vec<usize> {
     let mut processed_data: Vec<usize> = vec![];
 
     for chunk in input.chunks_exact(4) {
-        processed_data.push(u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize);
-    }
-
-    for element in processed_data.clone() {
-        print!("{}", element)
+        processed_data.push((chunk[0] as usize) * 256^3 + (chunk[1] as usize) * 256^2 + (chunk[2] as usize) * 256 + (chunk[3] as usize));
     }
 
     processed_data
