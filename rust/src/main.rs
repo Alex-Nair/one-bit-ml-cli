@@ -15,12 +15,12 @@ fn main() {
     train(model, data_converted);
     */
 
-    let mut matrix_1: Matrix<f32> = Matrix::new(5, 3, 0.0);
+    let mut matrix_1: Matrix<f32> = Matrix::new(5, 3, 3.0);
     let matrix_2: Matrix<f32> = Matrix::new(5, 3, 2.0);
 
-    matrix_1.set(0, 2, 3.0);
+    matrix_1.set(0, 2, 6.0);
     matrix_1.display();
 
-    let matrix_3: Matrix<f32> = matrix_1 + matrix_2;
+    let matrix_3: Matrix<f32> = matrix_1.pow_matrix(matrix_2);
     matrix_3.display();
 }
