@@ -43,7 +43,7 @@ impl<T: Numeric> Matrix<T> {
     }
 
 
-    // Raising to the power (unit-wise)
+    // Raising to the power of either a single number of a matrix of the same size.
     pub fn pow_unit(&mut self, pow: T) -> Matrix<T> {
         let mut data: Vec<T> = vec![];
 
@@ -59,6 +59,16 @@ impl<T: Numeric> Matrix<T> {
     }
 
     pub fn pow_matrix(&mut self, other: Matrix<T>) -> Matrix<T> {
+        if self.rows != other.rows || self.cols != other.cols {
+            println!("ERROR ENCOUNTERED - Raising matrix to another matrix.");
+            println!("Dimension mismatch: ({}, {})^({}, {})", self.rows, self.cols, other.rows, other.cols);
+            return Matrix {
+                rows: self.rows,
+                cols: self.cols,
+                data: self.data.clone()
+            }; // Fallback option.
+        }        
+
         let mut data: Vec<T> = vec![];
 
         for i in 0..self.data.len() {
@@ -74,6 +84,7 @@ impl<T: Numeric> Matrix<T> {
 }
 
 
+// Add Functions
 impl <T: Numeric> Add for Matrix<T> {
     type Output = Self;
 
@@ -89,6 +100,20 @@ impl <T: Numeric> Add for Matrix<T> {
         for i in 0..self.data.len() {
             data.push(self.data[i].clone() + other.data[i].clone());
         }
+
+        Matrix {
+            rows: self.rows,
+            cols: self.cols,
+            data: data
+        }
+    }
+}
+
+impl <T: Numeric> Add<T> for Matrix<T> {
+    type Output = Self;
+
+    fn add(self, other: T) -> Self {
+        let data: Vec<T> = self.data.iter().map(|x| x.clone() + other.clone()).collect();
 
         Matrix {
             rows: self.rows,
@@ -114,6 +139,20 @@ impl <T: Numeric> Sub for Matrix<T> {
         for i in 0..self.data.len() {
             data.push(self.data[i].clone() - other.data[i].clone());
         }
+
+        Matrix {
+            rows: self.rows,
+            cols: self.cols,
+            data: data
+        }
+    }
+}
+
+impl <T: Numeric> Sub<T> for Matrix<T> {
+    type Output = Self;
+
+    fn sub(self, other: T) -> Self {
+        let data: Vec<T> = self.data.iter().map(|x| x.clone() - other.clone()).collect();
 
         Matrix {
             rows: self.rows,
@@ -156,6 +195,20 @@ impl <T: Numeric> Mul for Matrix<T> {
     }
 }
 
+impl <T: Numeric> Mul<T> for Matrix<T> {
+    type Output = Self;
+
+    fn mul(self, other: T) -> Self {
+        let data: Vec<T> = self.data.iter().map(|x| x.clone() * other.clone()).collect();
+
+        Matrix {
+            rows: self.rows,
+            cols: self.cols,
+            data: data
+        }
+    }
+}
+
 
 impl <T: Numeric> Div for Matrix<T> {
     type Output = Self;
@@ -172,6 +225,21 @@ impl <T: Numeric> Div for Matrix<T> {
         for i in 0..self.data.len() {
             data.push(self.data[i].clone() / other.data[i].clone());
         }
+
+        Matrix {
+            rows: self.rows,
+            cols: self.cols,
+            data: data
+        }
+    }
+}
+
+
+impl <T: Numeric> Div<T> for Matrix<T> {
+    type Output = Self;
+
+    fn div(self, other: T) -> Self {
+        let data: Vec<T> = self.data.iter().map(|x| x.clone() / other.clone()).collect();
 
         Matrix {
             rows: self.rows,
