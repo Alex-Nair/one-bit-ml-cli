@@ -5,6 +5,7 @@ python/.basedpyright/
 
 # Rust
 rust/target/
+rust/src/one_bit_llm/parts_OLD.rs
 
 # Dataset
 dataset/tokens.bin
